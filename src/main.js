@@ -1,8 +1,8 @@
-import Fastify from "npm:fastify";
-import fastifyCors from "npm:@fastify/cors";
-import FastifyIO from "npm:fastify-socket.io";
-import process from "node:process";
-import setupRoutes from "@/routes/router.js";
+import Fastify from "fastify";
+import fastifyCors from "@fastify/cors";
+import FastifyIO from "fastify-socket.io";
+import process from "process";
+import setupRoutes from "./routes/router.js";
 
 const server = Fastify({
   logger: process.env.NODE_ENV === "development",

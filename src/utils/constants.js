@@ -21,7 +21,7 @@ export const OPERATIONS = {
 
 export const EXPERIMENTS = [
   "MRUA",
-  "FreeFall",
-  "MetalDetector",
-  "Termometer",
+  "FF",
+  "MD",
+  "TMT",
 ];

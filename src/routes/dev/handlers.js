@@ -1,7 +1,6 @@
-import { DEVICE_STATES, EVENTS } from "constants";
+import { DEVICE_STATES, EVENTS } from "../../utils/constants.js";
 import SIMULATIONS from "./simulations.js";
-import { formatResponse } from "utils";
-import { clearInterval, setInterval } from "node:timers";
+import { formatResponse } from "../../utils/helpers.js";
 
 const { DISCONNECTED, CONNECTED, STREAMING, PAUSED, EXP_LOADED } =
   DEVICE_STATES;
@@ -11,7 +10,7 @@ let experimentState = DISCONNECTED;
 let selectedExperiment = null;
 let simulationInterval = null;
 
-export default async function handleTestEvent(event, data, socket) {
+export default function handleTestEvent(event, data, socket) {
   try {
     switch (event) {
       case CONNECT_DEV:

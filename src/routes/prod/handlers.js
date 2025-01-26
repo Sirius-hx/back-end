@@ -5,17 +5,22 @@ import {
   loadExperiment,
   removeDataListener,
   reset,
-} from "@/services/device.js";
+} from "../../services/device.js";
 
-import { DEVICE_STATES, EVENTS, EXPERIMENTS, OPERATIONS } from "constants";
-import { formatResponse } from "utils";
+import {
+  DEVICE_STATES,
+  EVENTS,
+  EXPERIMENTS,
+  OPERATIONS,
+} from "../../utils/constants.js";
+import { formatResponse } from "../../utils/helpers.js";
 
 const { DISCONNECTED, STREAMING, PAUSED, EXP_LOADED } = DEVICE_STATES;
-
 const { CONNECT_DEV, START_EXP, PAUSE_EXP, CHANGE_EXP } = EVENTS;
 const { INIT, PAUSE, ESC } = OPERATIONS;
 
-let state = DISCONNECTED; // The state of the device
+let state = DISCONNECTED;
+let selectedExperiment = null;
 
 export default async function handleEvent(event, data, socket) {
   try {
@@ -23,14 +28,15 @@ export default async function handleEvent(event, data, socket) {
       case CONNECT_DEV:
         return await handleConnect(data, socket);
       case START_EXP:
-        return await handleStart(socket);
+        return await handleStart(data, socket);
       case PAUSE_EXP:
         return await handlePause(socket);
       case CHANGE_EXP:
-        return await handleChangeExperiment(socket);
+        return await handleChangeExperiment(data, socket);
     }
   } catch (error) {
     state = DISCONNECTED;
+    selectedExperiment = null;
     reset();
     socket.emit("error", formatResponse(false, error));
   }
@@ -49,7 +55,7 @@ async function handleConnect(data, socket) {
       CONNECT_DEV,
       formatResponse(false, "Device already connected"),
     );
-  } else if (!(EXPERIMENTS.includes(experiment))) {
+  } else if (!EXPERIMENTS.includes(experiment)) {
     return socket.emit(
       CONNECT_DEV,
       formatResponse(false, "Invalid experiment selected"),
@@ -59,18 +65,38 @@ async function handleConnect(data, socket) {
   // For our logic, it's an error that the device gets disconnected
   // while the programm is running so we throw an error if we detect that
   const onCloseDevice = () => {
-    throw new Error("Device disconnected. Please reconnect and try again");
+    socket.emit(
+      "error",
+      formatResponse(
+        false,
+        "Device disconnected forcibly. Please reconnect and try again",
+      ),
+    );
+    state = DISCONNECTED;
+    selectedExperiment = null;
+    reset();
   };
 
-  const deviceFound = await find(manufacturer, baudRate, onCloseDevice);
+  try {
+    const deviceFound = await find(manufacturer, baudRate, onCloseDevice);
 
-  if (!deviceFound.success) {
-    return socket.emit(CONNECT_DEV, deviceFound);
+    if (!deviceFound.success) {
+      return socket.emit(CONNECT_DEV, deviceFound);
+    }
+
+    const experimentLoaded = await loadExperiment(experiment);
+    if (!experimentLoaded.success) {
+      return socket.emit(CONNECT_DEV, experimentLoaded);
+    }
+  } catch (err) {
+    state = DISCONNECTED;
+    selectedExperiment = null;
+    reset();
+    return socket.emit(CONNECT_DEV, formatResponse(false, err));
   }
 
-  await loadExperiment(experiment);
-
   state = EXP_LOADED;
+  selectedExperiment = experiment;
 
   socket.emit(
     CONNECT_DEV,
@@ -81,7 +107,7 @@ async function handleConnect(data, socket) {
   );
 }
 
-function handleStart(options, socket) {
+function handleStart(data, socket) {
   if (state !== EXP_LOADED && state !== PAUSED) {
     return socket.emit(
       START_EXP,
@@ -97,7 +123,7 @@ function handleStart(options, socket) {
       START_EXP,
       formatResponse(
         false,
-        "No experiment loaded. Please load a experiment first",
+        "No experiment loaded. Please load an experiment first",
       ),
     );
   }
@@ -106,18 +132,30 @@ function handleStart(options, socket) {
    * The user can define a custom eventName property that will be used to emit the data. In
    * case is not provided, by default the value is equal to the selectedExperiment.
    */
-  const { eventName = selectedExperiment } = options;
+  const { eventName = selectedExperiment } = data;
 
-  executeOperation(INIT);
-  addDataListener(eventName, (deviceData) => {
-    if (!(deviceData instanceof JSON)) {
-      throw new Error(
-        "Data received from the device is not in JSON format",
+  try {
+    executeOperation(INIT);
+  } catch (err) {
+    state = DISCONNECTED;
+    selectedExperiment = null;
+    reset();
+    return socket.emit("error", formatResponse(false, err.message));
+  }
+
+  addDataListener((deviceData) => {
+    if (!(deviceData instanceof ({}).constructor)) {
+      return socket.emit(
+        "error",
+        formatResponse(
+          false,
+          "Data received from the device is not in JSON format",
+        ),
       );
     }
-
     socket.emit(eventName, deviceData);
   });
+
   state = STREAMING;
 }
 
@@ -129,7 +167,15 @@ function handlePause(socket) {
     );
   }
 
-  executeOperation(PAUSE);
+  try {
+    executeOperation(PAUSE);
+  } catch (err) {
+    state = DISCONNECTED;
+    selectedExperiment = null;
+    reset();
+    return socket.emit("error", formatResponse(false, err.message));
+  }
+
   removeDataListener();
   state = PAUSED;
 }
@@ -151,18 +197,27 @@ async function handleChangeExperiment(data, socket) {
       CHANGE_EXP,
       formatResponse(false, "No experiment selected for change"),
     );
-  } else if (!(EXPERIMENTS.includes(experiment))) {
+  } else if (!EXPERIMENTS.includes(experiment)) {
     return socket.emit(
       CHANGE_EXP,
       formatResponse(false, "Invalid experiment selected for change"),
     );
   }
 
-  executeOperation(ESC);
-
-  await loadExperiment(experiment);
-
-  socket.emit(CHANGE_EXP, formatResponse(true, experimentLoaded.message));
+  try {
+    executeOperation(ESC);
+    const experimentLoaded = await loadExperiment(experiment);
+    if (!experimentLoaded.success) {
+      return socket.emit(CHANGE_EXP, experimentLoaded);
+    }
+    socket.emit(CHANGE_EXP, experimentLoaded);
+  } catch (err) {
+    state = DISCONNECTED;
+    selectedExperiment = null;
+    reset();
+    return socket.emit(CHANGE_EXP, formatResponse(false, err));
+  }
 
   state = EXP_LOADED;
+  selectedExperiment = experiment;
 }

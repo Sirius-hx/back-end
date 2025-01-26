@@ -1,7 +1,7 @@
-import handleTestEvent from "@/routes/dev/handlers.js";
-import handleEvent from "@/routes/prod/handlers.js";
-import { reset } from "@/services/device.js";
-import { EVENTS } from "constants";
+import handleTestEvent from "./dev/handlers.js";
+import handleEvent from "./prod/handlers.js";
+import { reset } from "../services/device.js";
+import { EVENTS } from "../utils/constants.js";
 
 /*
  * This function sets up the routes for the server. Since the server is using socket.io,

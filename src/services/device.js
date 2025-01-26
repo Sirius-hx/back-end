@@ -1,30 +1,22 @@
-import { SerialPort } from "npm:serialport";
-import { ReadyParser } from "npm:@serialport/parser-ready";
-import { setTimeout } from "node:timers";
-import { DEVICE_STATES, OPERATIONS } from "constants";
-import { formatResponse } from "utils";
-
-const { CONNECTED, STREAMING, PAUSED } = DEVICE_STATES;
-const { INIT, PAUSE, ESC } = OPERATIONS;
+import { SerialPort } from "serialport";
+import { DelimiterParser } from "@serialport/parser-delimiter";
+import { OPERATIONS } from "../utils/constants.js";
+import { formatResponse } from "../utils/helpers.js";
 
 let device = null, parser = null;
 
-export async function find(
-  manufacturer = "FTDI",
-  baudRate = 9600,
-  onClose,
-) {
+export async function find(manufacturer = "FTDI", baudRate = 9600, onClose) {
   const ports = await SerialPort.list();
 
-  if (ports.length == 0) {
+  if (ports.length === 0) {
     return formatResponse(
       false,
       "No devices connected. Please connect a device and try again",
     );
   }
 
-  const port = ports.find((port) =>
-    port.manufacturer && port.manufacturer.includes(manufacturer)
+  const port = ports.find((p) =>
+    p.manufacturer && p.manufacturer.includes(manufacturer)
   );
 
   if (!port) {
@@ -34,62 +26,71 @@ export async function find(
     );
   }
 
-  const deviceLoaded = await openPort(port.path, baudRate, onClose);
-
-  if (!deviceLoaded) {
-    return formatResponse(
-      false,
-      "Device found but not responding. Please check the device and try again",
-    );
+  try {
+    const deviceLoaded = await openPort(port.path, baudRate, onClose);
+    if (!deviceLoaded) {
+      return formatResponse(false, "Device found but not responding");
+    }
+  } catch (err) {
+    return formatResponse(false, err);
   }
 
-  return formatResponse(deviceLoaded, "Device found and opened");
+  return formatResponse(true, "Device found and opened");
 }
 
-export async function loadExperiment(experiment) {
-  device.write(experiment, (err) => {
-    if (err) {
-      throw new Error(
-        `A fatal error ocurred while loading the experiment: ${err}`,
-      );
-    }
-  });
+export function loadExperiment(experiment) {
+  return new Promise((resolve, reject) => {
+    device.write(`${experiment}\n`, (err) => {
+      if (err) {
+        return reject(
+          `A fatal error ocurred while loading the experiment: ${err}`,
+        );
+      }
 
-  const experimentLoaded = (experiment) => {
-    /*
-     * In order to know if the experiment was loaded successfully, the device
-     * will send a message with the experiment code. We listen for this message
-     * and resolve the promise when it's received. If the message is not received
-     * after 2 seconds, the promise will resolve with false.
-     */
-    const responseFromDevice = new Promise((resolve) => {
-      parser.once("data", (expCode) => resolve(expCode == experiment));
+      /*
+       * In order to know if the experiment was loaded successfully, the device
+       * will send a message with the experiment code. We listen for this message
+       * and resolve the promise when it's received. If the message is not received
+       * after 2 seconds, the promise will resolve with false.
+       */
+
+      const experimentLoaded = (exp) => {
+        const responseFromDevice = new Promise((resolve) => {
+          parser.once("data", (expCode) => resolve(expCode === exp));
+        });
+
+        const timeout = new Promise((resolve) =>
+          setTimeout(() => resolve(false), 2000)
+        );
+
+        return Promise.race([responseFromDevice, timeout]);
+      };
+
+      experimentLoaded(experiment)
+        .then((isLoaded) => {
+          if (!isLoaded) {
+            reject(
+              `The experiment ${experiment} could not be loaded. Check the device`,
+            );
+          } else {
+            resolve(
+              formatResponse(
+                true,
+                `Experiment ${experiment} loaded successfully`,
+              ),
+            );
+          }
+        })
+        .catch((error) =>
+          reject(`Error while verifying experiment load: ${error}`)
+        );
     });
-
-    const timeout = new Promise((resolve) =>
-      setTimeout(() => resolve(false), 2000)
-    );
-
-    return Promise.race[responseFromDevice, timeout];
-  };
-
-  const isLoaded = await experimentLoaded(experiment);
-
-  if (!isLoaded) {
-    throw new Error(
-      `The experiment ${experiment} could not be loaded. Check the device`,
-    );
-  }
-
-  return formatResponse(
-    isLoaded,
-    `Experiment ${experiment} loaded successfully`,
-  );
+  });
 }
 
 export function executeOperation(operation) {
-  if (!(operation in OPERATIONS)) {
-    return formatResponse(false, `Operation '${operation}' is not supported`);
+  if (!Object.values(OPERATIONS).includes(operation)) {
+    throw new Error(`Operation '${operation}' is not supported`);
   }
 
   device.write(operation, (err) => {
@@ -99,60 +100,80 @@ export function executeOperation(operation) {
       );
     }
   });
-
-  switch (operation) {
-    case INIT:
-      state = STREAMING;
-      break;
-
-    case PAUSE:
-      state = PAUSED;
-      break;
-
-    case ESC:
-      state = CONNECTED;
-      break;
-  }
 }
 
 export function openPort(portPath, bauds, onClose) {
-  device = new SerialPort({ path: portPath, baudRate: bauds });
+  return new Promise((resolve, reject) => {
+    device = new SerialPort({ path: portPath, baudRate: bauds }, (err) => {
+      if (err) {
+        console.error(`Error opening port: ${err}`);
+        reset();
+        return reject(`Error opening port: ${err.message}`);
+      }
 
-  parser = device.pipe(new ReadyParser({ delimiter: "SIRIUS STARTED" }));
+      parser = device.pipe(
+        new DelimiterParser({ delimiter: "\r\n", encoding: "utf8" }),
+      );
 
-  /*
-   * It seems like the ready-parser doesn't have a timeout option so we create a promise
-   * that gets resolved after 2 seconds. If the ready event is emitted before the timer
-   * resolves, the function will return true. If the timer resolves first, the function
-   * will return false. This way we can know if the device is ready or not after 2 seconds
-   */
+      /*
+       * It seems like the ready-parser doesn't have a timeout option so we create a promise
+       * that gets resolved after 2 seconds. If the ready event is emitted before the timer
+       * resolves, the function will return true. If the timer resolves first, the function
+       * will return false. This way we can know if the device is ready or not after 2 seconds
+       */
+      const timeout = new Promise((resolveTimeout) => {
+        setTimeout(() => resolveTimeout(false), 2000);
+      });
 
-  const timeout = new Promise((resolve) => {
-    setTimeout(() => resolve(false), 2000);
-  });
+      const readyMsg = new Promise((resolveReady) => {
+        parser.once(
+          "data",
+          (readySeq) => resolveReady(readySeq === "SIRIUS STARTED"),
+        );
 
-  const readyMsg = new Promise((resolve) => {
-    parser.on("ready", () => resolve(true));
+        parser.on("error", (errParsing) => {
+          console.error(
+            `An error ocurred while parsing the data: ${errParsing}`,
+          );
+          resolveReady(false);
+        });
+      });
 
-    parser.on("error", (err) => {
-      throw new Error(`An error ocurred while parsing the data: ${err}`);
+      device.once("close", () => onClose());
+
+      Promise.race([timeout, readyMsg])
+        .then((result) => {
+          if (!result) {
+            reset();
+            return resolve(false);
+          }
+          resolve(result);
+        })
+        .catch((error) => {
+          reset();
+          reject(`Error while opening port: ${error}`);
+        });
     });
   });
-
-  device.once("close", () => onClose());
-
-  return Promise.race([timeout, readyMsg]);
 }
 
 export function addDataListener(callback) {
-  parser.on("data", callback);
+  parser.on("data", (data) => {
+    if (!(data instanceof ({}).constructor)) {
+      data = JSON.parse(data);
+    }
+    callback(data);
+  });
 }
 
-export function removeDataListener(callback) {
-  parser.removeListener("data", callback);
+export function removeDataListener() {
+  parser.removeAllListeners("data");
 }
 
 export function reset() {
+  if (device && device.isOpen) {
+    device.close();
+  }
   device = null;
   parser = null;
 }
