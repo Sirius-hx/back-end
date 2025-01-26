@@ -18,3 +18,10 @@ export const OPERATIONS = {
   PAUSE: "PAUSE",
   ESC: "ESC",
 };
+
+export const EXPERIMENTS = [
+  "MRUA",
+  "FreeFall",
+  "MetalDetector",
+  "Termometer",
+];

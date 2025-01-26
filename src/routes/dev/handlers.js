@@ -1,17 +1,11 @@
 import { DEVICE_STATES, EVENTS } from "constants";
+import SIMULATIONS from "./simulations.js";
 import { formatResponse } from "utils";
 import { clearInterval, setInterval } from "node:timers";
 
 const { DISCONNECTED, CONNECTED, STREAMING, PAUSED, EXP_LOADED } =
   DEVICE_STATES;
 const { CONNECT_DEV, START_EXP, PAUSE_EXP, CHANGE_EXP } = EVENTS;
-
-const generators = {
-  "MRUA": generateMRUAData,
-  "FreeFall": generateFreeFallData,
-  "Termometer": generateTermometerData,
-  "MetalDetector": generateMetalDetectorData,
-};
 
 let experimentState = DISCONNECTED;
 let selectedExperiment = null;
@@ -29,13 +23,10 @@ export default async function handleTestEvent(event, data, socket) {
       case CHANGE_EXP:
         return handleChangeExperiment(data, socket);
       default:
-        socket.emit(event, {
-          status: false,
-          message: `Unknown event: ${event}`,
-        });
+        socket.emit(event, formatResponse(false, `Unknown event: ${event}`));
     }
   } catch (error) {
-    socket.emit("error", { status: false, message: error.message, event });
+    socket.emit("error", formatResponse(false, error));
   }
 }
 
@@ -93,7 +84,7 @@ function handleStart(socket) {
   }
 
   try {
-    startSimulation(socket, generators[selectedExperiment]);
+    startSimulation(socket, SIMULATIONS[selectedExperiment]);
     experimentState = STREAMING;
   } catch (error) {
     socket.emit(
@@ -157,7 +148,7 @@ function handleChangeExperiment(data, socket) {
   );
 }
 
-function startSimulation(socket, generator) {
+function startSimulation(socket, func) {
   clearInterval(simulationInterval);
 
   let time = 0;
@@ -165,60 +156,10 @@ function startSimulation(socket, generator) {
 
   simulationInterval = setInterval(() => {
     if (experimentState === STREAMING) {
-      const data = generator(time, attempt);
+      const data = func(time, attempt);
       socket.emit("expData", data);
       time += 1;
       if (selectedExperiment === "FreeFall") attempt++;
     }
   }, 1000);
-}
-
-function generateMRUAData(time) {
-  // Simulate uniform accelerated motion with just distance and time
-  const acceleration = 2; // m/s²
-  const initialVelocity = 0; // m/s
-  const distance = (initialVelocity * time) +
-    (0.5 * acceleration * time * time);
-
-  return {
-    MRUA: {
-      time: time.toFixed(1),
-      distance: distance.toFixed(2),
-    },
-  };
-}
-
-function generateFreeFallData(time, attempt) {
-  const variation = (Math.random() - 0.5) * 0.4;
-  const gravity = 9.78 + variation;
-
-  return {
-    FF: {
-      attempt,
-      acceleration: gravity.toFixed(2),
-      error: Math.abs(((gravity - 9.78) / 9.78) * 100).toFixed(2), // Error percentage
-    },
-  };
-}
-
-function generateTermometerData(time) {
-  const baseTemp = 25; // °C
-  const variation = Math.sin(time * 0.1) * 5;
-
-  return {
-    TMT: {
-      time: time.toFixed(1),
-      temperature: (baseTemp + variation).toFixed(1),
-    },
-  };
-}
-
-function generateMetalDetectorData(time) {
-  const isFerrous = Math.floor(time / 3) % 2 === 0;
-
-  return {
-    MD: {
-      isFerrous: isFerrous ? 1 : 0,
-    },
-  };
 }
